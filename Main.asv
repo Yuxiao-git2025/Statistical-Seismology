@@ -1,0 +1,21 @@
+% =========================================================================
+% Create Discrete fault networks and some analysis
+% Written by Kyungjae (KJ) Im
+% Modified at 2026/04/02 (Yu)
+% 
+% =========================================================================
+global Doing
+Doing=1;
+IM_fGlobalInput();
+
+%% Basic Calculation
+[ITime,IDt,IDisp,IV,IFriction,ITheta,INormalStress,IAccel,IFarDisp]=IM_SimulatorSolver();
+
+%% Detection and Plot
+[Event,Fault,CumEvent]=IM_DetectEvents(ITime,IDisp);
+IM_MappingFault1(ITime,IDt,IDisp,IV,IFriction,ITheta,INormalStress,IAccel,IFarDisp,Event);
+
+%% More information
+% 1. Comparision time-to-instability between theory and true
+% 2. Calculate the average seismicity according to faults element
+[Nrate,Time2inst]=IM_calAnnualSeismicity(Event,ITime,CumEvent);

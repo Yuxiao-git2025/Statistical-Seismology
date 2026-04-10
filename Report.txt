@@ -1,0 +1,276 @@
+% function [Fcen, Flen, Fangle, FRL, FiniNormal, FiniShear]=IM_FaultGenerate( ...
+%     Fseg, DxMin, DxMax, DyMin, DyMax, Fangle1, Fangle2, FlenMin, FlenMax, ...
+%     Sigma1, Sigma3, MainPart, RepLen, RepDMin, seed)
+
+if ~isempty(seed)
+    rng(seed);
+end
+
+% >> lengths: log-uniform or exponential-like (log-uniform for stability)
+u = rand(Fseg,1);
+Flen = 10.^( u*(log10(FlenMax)-log10(FlenMin)) + log10(FlenMin) );
+
+% >> centers: repulsive in unit box then map to domain
+niter=80;
+X = IM_Repulsive(Fseg, RepLen, RepDMin, niter, seed); % [0,RepLen]
+Xn = X / RepLen; % normalize to 0-1
+
+% Main band + background
+nMain = max(1, round(Fseg*MainPart));
+idxMain = 1:nMain;
+idxBG   = nMain+1:Fseg;
+Fcen = zeros(Fseg,2);
+
+% Main band: along FaultAngle1 trend
+yMainMin = DyMin + 0.2*(DyMax-DyMin);
+yMainMax = DyMin + 0.8*(DyMax-DyMin);
+
+Y = zeros(Fseg,1);
+Y(idxMain) = yMainMin + Xn(idxMain,2) * (yMainMax - yMainMin);
+Y(idxBG)   = DyMin + Xn(idxBG,2)   * (DyMax - DyMin);
+
+% X around a line with some scatter
+xCenter = (DxMin + DxMax)/2;
+yCenter = (DyMin + DyMax)/2;
+sX = 0.01*(DxMax-DxMin);
+
+Fcen(:,2) = Y;
+Fcen(:,1) = xCenter + (Y - yCenter) * tand(Fangle1) + randn(Fseg,1)*sX;
+
+% clip to domain
+Fcen(:,1) = min(max(Fcen(:,1), DxMin), DxMax);
+
+% >> angles, FRL
+sel = rand(Fseg,1);
+Fangle = Fangle2*ones(Fseg,1);
+Fangle(sel>0.8) = Fangle1;
+
+FRL=ones(Fseg,1);
+FRL(Fangle>0)=-1;  % positive angle with -1
+
+% >> initial stresses from Sigma1/Sigma3 and angle
+frad = deg2rad(Fangle);
+FiniNormal = (Sigma1+Sigma3)/2 + (Sigma1-Sigma3)/2 .* cos( 2*(pi/2 - frad) );
+FiniShear  = abs((Sigma1-Sigma3)/2 .* sin( 2*(pi/2 - frad) ));
+
+function [FaultElementCenter,FaultElementLength,FaultAngle,FaultAngleRad,FaultRRLL,InitialNormalStress,InitialShearStress,VlStress,FaultElementCount,SegmentCountPerFault,FaultLength_Overall, FaultNumberForElement,FaultLength_Bulk,FaultCenter_Bulk]...
+    = Function_FaultGeneration( Fseg,Fangle1,Fangle2,FlenMin,FlenMax,DxMin,DxMax, DyMin,DyMax ,Sigma1,Sigma3,LoadingRate )
+% Generate Random Faults We need
+% Apply NormalStresses
+
+DiscretizeLength=1000; % Threshold length
+FaultLengthMin_BG=50;
+FaultLengthMax_BG=3000;
+MainFaultPortion=0.2;
+FaultElementCount=Fseg;
+FaultCenterMinX_BG=DxMin;
+FaultCenterMaxX_BG=DxMax;
+FaultCenterMinY_Fault=12000;
+FaultCenterMaxY_Fault=28000;
+Xdistribution=50;
+
+
+
+RandNumber = slicesample(1,Fseg,'pdf',@exppdf,'thin',5,'burnin',1000);
+RandNumber=RandNumber/max(RandNumber);
+FaultLength_Bulk=10.^(RandNumber*(log10(FlenMax)-log10(FlenMin))+log10(FlenMin));
+% %
+% %Fully Random
+% FaultCenter_Bulk=[rand(FaultElementCount,1)*(FaultCenterMaxX-FaultCenterMinX)+FaultCenterMinX,rand(FaultElementCount,1)*(FaultCenterMaxY-FaultCenterMinY)+FaultCenterMinY];
+
+% Random Directional
+FaultCenter_RandNumber=rand(FaultElementCount,1);
+[Center_Repulsive,L_Repulsive]=Function_RepulsiveDistribution(Fseg);
+FaultCenter_Y=Center_Repulsive(:,2)*(FaultCenterMaxY_Fault-FaultCenterMinY_Fault)/L_Repulsive+FaultCenterMinY_Fault;
+FaultCenter_Bulk=[(FaultCenter_Y-(FaultCenterMaxY_Fault+FaultCenterMinY_Fault)/2)*tan(deg2rad(Fangle1))+(FaultCenterMaxY_Fault+FaultCenterMinY_Fault)/2+normrnd(0,Xdistribution,[FaultElementCount,1]),FaultCenter_Y];
+
+% BackGround
+% % repulsive
+
+RandNumber_BG = slicesample(1,Fseg,'pdf',@exppdf,'thin',5,'burnin',1000);
+RandNumber_BG=RandNumber_BG/max(RandNumber_BG);
+FaultLength_Bulk_BG=10.^(RandNumber_BG*(log10(FaultLengthMax_BG)-log10(FaultLengthMin_BG))+log10(FaultLengthMin_BG));
+
+[Center_Repulsive_BG,L_Repulsive_BG]=Function_RepulsiveDistribution(Fseg);
+FaultCenter_Bulk_BG=Center_Repulsive_BG*(FaultCenterMaxX_BG-FaultCenterMinX_BG)/L_Repulsive_BG+FaultCenterMinX_BG;
+
+FaultCenter_Bulk(Fseg*MainFaultPortion+1:Fseg,:)=FaultCenter_Bulk_BG(Fseg*MainFaultPortion+1:Fseg,:);
+FaultLength_Bulk(Fseg*MainFaultPortion+1:Fseg)=FaultLength_Bulk_BG(Fseg*MainFaultPortion+1:Fseg);
+% FaultLength_Bulk(1)=FaultLengthMax;
+
+% FaultLength_Bulk(1)=100;
+% FaultCenter_Bulk(1,:)=[DomainMaxX/1.5,DomainMaxY/2.5];
+% FaultLength_Bulk(2)=200;
+% FaultCenter_Bulk(2,:)=[DomainMaxX/3,DomainMaxY/3];
+FaultSetRand_Bulk=2*rand(Fseg,1)-1; %+1 for Positive angle and left latteral
+% FaultSetRand_Bulk(1)=-1;
+for i=1:Fseg
+    if FaultSetRand_Bulk(i)>0.8
+        FaultAngle_Bulk(i,1)=Fangle1;
+        FaultAngleRad_Bulk(i,1)=deg2rad(FaultAngle_Bulk(i,1));
+        FaultSetRand_Bulk(i,1)=1;
+
+    else
+        FaultAngle_Bulk(i,1)=Fangle2;
+        FaultAngleRad_Bulk(i,1)=deg2rad(FaultAngle_Bulk(i,1));
+        FaultSetRand_Bulk(i,1)=-1;
+    end
+    if FaultAngle_Bulk(i,1)>0
+        FaultRRLL_Bulk(i,1)=-1;
+    else
+        FaultRRLL_Bulk(i,1)=1;
+    end
+    InitialNormalStress_Bulk(i,1)=((Sigma1+Sigma3)/2+(Sigma1-Sigma3)*cos(2*(pi/2-FaultAngleRad_Bulk(i)))/2);
+    InitialShearStress_Bulk(i,1)=(abs((Sigma1-Sigma3)*sin(2*(pi/2-FaultAngleRad_Bulk(i)))/2));
+    FaultIndex_Bulk(i,1)=i;
+end
+
+FaultX1_Bulk=FaultCenter_Bulk(:,1)+FaultLength_Bulk(:)/2.*sin(FaultAngleRad_Bulk(:));
+FaultX2_Bulk=FaultCenter_Bulk(:,1)-FaultLength_Bulk(:)/2.*sin(FaultAngleRad_Bulk(:));
+FaultY1_Bulk=FaultCenter_Bulk(:,2)+FaultLength_Bulk(:)/2.*cos(FaultAngleRad_Bulk(:));
+FaultY2_Bulk=FaultCenter_Bulk(:,2)-FaultLength_Bulk(:)/2.*cos(FaultAngleRad_Bulk(:));
+Vl_Bulk=(LoadingRate.*cos(FaultAngleRad_Bulk)); % Far-loding stressing (pa/s)
+
+
+for i=1:Fseg %how many segments in each bulk?
+    if FaultLength_Bulk(i) > DiscretizeLength % Define Target
+        %     if i==1 % Define Target
+        SegmentCountPerFault(i)=ceil(FaultLength_Bulk(i)/DiscretizeLength);
+    else
+        SegmentCountPerFault(i)=1;
+    end
+end
+
+%Adjust for first large one
+ElementIndex=0;
+for FaultIndex=1:Fseg %how many segments in each bulk?
+    SegmentIndex=0;
+    for j=1:SegmentCountPerFault(FaultIndex)
+        ElementIndex=ElementIndex+1;
+        SegmentIndex=SegmentIndex+1;
+        if SegmentCountPerFault(FaultIndex)==1
+            FaultElementCenter(ElementIndex,1)=FaultCenter_Bulk(FaultIndex,1);
+            FaultElementCenter(ElementIndex,2)=FaultCenter_Bulk(FaultIndex,2);
+            FaultElementLength(ElementIndex,1)=FaultLength_Bulk(FaultIndex);
+            FaultLength_Overall(ElementIndex,1)=FaultLength_Bulk(FaultIndex);
+            FaultSetRand(ElementIndex,1)=FaultSetRand_Bulk(FaultIndex);
+            FaultAngle(ElementIndex,1)=FaultAngle_Bulk(FaultIndex);
+            FaultAngleRad(ElementIndex,1)=FaultAngleRad_Bulk(FaultIndex);
+            FaultX1(ElementIndex,1)=FaultX1_Bulk(FaultIndex);
+            FaultX2(ElementIndex,1)=FaultX2_Bulk(FaultIndex);
+            FaultY1(ElementIndex,1)=FaultY1_Bulk(FaultIndex);
+            FaultY2(ElementIndex,1)=FaultY2_Bulk(FaultIndex);
+            FaultRRLL(ElementIndex,1)=FaultRRLL_Bulk(FaultIndex);
+            InitialNormalStress(ElementIndex,1)=InitialNormalStress_Bulk(FaultIndex);
+            InitialShearStress(ElementIndex,1)=InitialShearStress_Bulk(FaultIndex);
+            VlStress(ElementIndex)=Vl_Bulk(FaultIndex,1);
+            FaultNumberForElement(ElementIndex,1)=FaultIndex;
+        else
+            %             FaultLength(ElementIndex,1)=DiscretizeLength;
+            FaultElementLength(ElementIndex,1)=FaultLength_Bulk(FaultIndex)/SegmentCountPerFault(FaultIndex);
+            FaultAngle(ElementIndex,1)=FaultAngle_Bulk(FaultIndex);
+            FaultAngleRad(ElementIndex,1)=FaultAngleRad_Bulk(FaultIndex);
+            %             if j==FaultSegmentCount(FaultIndex)
+            %             FaultX1(ElementIndex,1)=FaultX1_Bulk(FaultIndex)-(SegmentIndex-1)*FaultLength(ElementIndex).*sin(FaultAngleRad(ElementIndex));
+            %             FaultY1(ElementIndex,1)=FaultY1_Bulk(FaultIndex)-(SegmentIndex-1)*FaultLength(ElementIndex).*cos(FaultAngleRad(ElementIndex));
+            %             FaultX2(ElementIndex,1)=FaultX2_Bulk(FaultIndex);
+            %             FaultY2(ElementIndex,1)=FaultY2_Bulk(FaultIndex);
+            %             else
+            FaultX1(ElementIndex,1)=FaultX1_Bulk(FaultIndex)-(SegmentIndex-1)*FaultElementLength(ElementIndex).*sin(FaultAngleRad(ElementIndex));
+            FaultY1(ElementIndex,1)=FaultY1_Bulk(FaultIndex)-(SegmentIndex-1)*FaultElementLength(ElementIndex).*cos(FaultAngleRad(ElementIndex));
+            FaultX2(ElementIndex,1)=FaultX1_Bulk(FaultIndex)-SegmentIndex*FaultElementLength(ElementIndex).*sin(FaultAngleRad(ElementIndex));
+            FaultY2(ElementIndex,1)=FaultY1_Bulk(FaultIndex)-SegmentIndex*FaultElementLength(ElementIndex).*cos(FaultAngleRad(ElementIndex));
+            %             end
+            FaultElementCenter(ElementIndex,1)=(FaultX1(ElementIndex,1)+FaultX2(ElementIndex,1))/2;
+            FaultElementCenter(ElementIndex,2)=(FaultY1(ElementIndex,1)+FaultY2(ElementIndex,1))/2;
+            FaultLength_Overall(ElementIndex,1)=FaultLength_Bulk(FaultIndex);
+
+            FaultSetRand(ElementIndex,1)=FaultSetRand_Bulk(FaultIndex);
+            FaultRRLL(ElementIndex,1)=FaultRRLL_Bulk(FaultIndex);
+            InitialNormalStress(ElementIndex,1)=InitialNormalStress_Bulk(FaultIndex);
+            InitialShearStress(ElementIndex,1)=InitialShearStress_Bulk(FaultIndex);
+            VlStress(ElementIndex,1)=Vl_Bulk(FaultIndex);
+            FaultNumberForElement(ElementIndex,1)=FaultIndex;
+
+        end
+
+    end
+end
+%
+% FaultCenter=FaultCenter_Bulk
+% FaultLength=FaultLength_Bulk
+% FaultSetRand=FaultSetRand_Bulk
+% FaultAngle=FaultAngle_Bulk
+% FaultAngleRad=FaultAngleRad_Bulk
+% FaultX1=FaultX1_Bulk
+% FaultX2=FaultX2_Bulk
+% FaultY1=FaultY1_Bulk
+% FaultY2=FaultY2_Bulk
+% FaultRRLL=FaultRRLL_Bulk
+% InitialNormalStress=InitialNormalStress_Bulk
+% InitialShearStress=InitialShearStress_Bulk,
+% Vl=Vl_Bulk
+FaultElementCount=ElementIndex;
+end
+
+
+
+function [X,L]=Function_RepulsiveDistribution(FaultElementCount)
+L = 50; % length of square sides
+x0 = L/2; y0 = L/2; 
+n=FaultElementCount;
+% Generate 2D Epanechnikov-distribution
+X = [x0,y0] + (sin(asin(2*rand(n,2)-1)/3))*L;
+XYR = [x0,y0]+[[-1;1;1;-1;-1],[-1;-1;1;1;-1]]*L/2;
+XB = interp1((0:4)'*L,XYR,linspace(0,4*L,200));
+XB(end,:) = [];
+nrepulsion = 100;
+% Repulsion of seeds to avoid them to be too close to each other
+n = size(X,1);
+Xmin = [x0-L/2,y0-L/2];
+Xmax = [x0+L/2,y0+L/2];
+dmin = 0.5;
+d2min = dmin*dmin;
+for k = 1:nrepulsion
+    XALL = [X; XB];
+    DT = delaunayTriangulation(XALL);
+    T = DT.ConnectivityList;
+    containX = ismember(T,1:n);
+    b = any(containX,2);
+    TX = T(b,:);
+    [r,i0] = find(containX(b,:));
+    i = mod(i0+(-1:1),3)+1;
+    i = TX(r + (i-1)*size(TX,1));
+    T = accumarray([i(:,1);i(:,1)],[i(:,2);i(:,3)],[n 1],@(x) {x});
+    maxd2 = 0;
+    R = zeros(n,2);
+    move = false(n,1);
+    for i=1:n
+        Ti = T{i};
+        P = X(i,:) - XALL(Ti,:);
+        nP2 = sum(P.^2,2);
+        if any(nP2<2*d2min)
+            move(i) = true;
+            move(Ti(Ti<=n)) = true;
+        end
+        maxd2 = maxd2 + mean(nP2);
+        b = Ti > n;
+        nP2(b) = nP2(b)*5; % reduce repulsion from each point of the border
+        R(i,:) = sum(P./max((nP2-d2min),1e-3),1);
+    end
+    if ~any(move)
+        break
+    end
+    if k==1
+        v0 = (L*5e-3)/sqrt(maxd2/n);
+    end
+    R = R(move,:);
+    v = v0/sqrt(max(sum(R.^2,2)));
+    X(move,:) = X(move,:) + v*R;
+    X = min(max(X,Xmin),Xmax);
+end
+theta = linspace(0,2*pi,65);
+xc = dmin/2*sin(theta);
+yc = dmin/2*cos(theta);
+
+end
